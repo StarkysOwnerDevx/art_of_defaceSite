@@ -2,33 +2,59 @@
   let defaceEntries = [];
   let hackerStats = {};
   let lastResetDate = null;
+  let syncInProgress = false;
+  let pendingSync = false;
 
-  function loadFromStorage() {
-    const stored = localStorage.getItem('artdeface_entries_v2');
-    if (stored) {
-      try {
-        defaceEntries = JSON.parse(stored);
-      } catch(e) {
-        defaceEntries = [];
-      }
+  const API_BIN_ID = '6749e1d2ad19ca34f874c545';
+  const API_KEY = '$2a$10$WjFJQpK9XxL8yM3nV5pQ7OeR6tY8uI0oP2aZ3xC4vB5nM6lK9jH';
+  const API_URL = 'https://api.jsonbin.io/v3/b/' + API_BIN_ID;
+
+  async function syncFromCloud() {
+    if (syncInProgress) {
+      pendingSync = true;
+      return;
     }
     
-    const storedStats = localStorage.getItem('artdeface_hacker_stats');
-    if (storedStats) {
-      try {
-        hackerStats = JSON.parse(storedStats);
-      } catch(e) {
-        hackerStats = {};
+    syncInProgress = true;
+    
+    try {
+      const response = await fetch(API_URL, {
+        headers: {
+          'X-Master-Key': API_KEY
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        const cloudData = data.record;
+        
+        if (cloudData) {
+          if (cloudData.defaceEntries && Array.isArray(cloudData.defaceEntries)) {
+            defaceEntries = cloudData.defaceEntries;
+          }
+          if (cloudData.hackerStats) {
+            hackerStats = cloudData.hackerStats;
+          }
+          if (cloudData.lastResetDate) {
+            lastResetDate = cloudData.lastResetDate;
+          }
+          
+          localStorage.setItem('artdeface_backup', JSON.stringify({ defaceEntries, hackerStats, lastResetDate }));
+        }
+      } else {
+        console.log('Cloud sync failed, using local backup');
+        loadLocalBackup();
       }
+    } catch (e) {
+      console.log('Network error, using local backup');
+      loadLocalBackup();
     }
     
-    const storedReset = localStorage.getItem('artdeface_last_reset');
-    if (storedReset) {
-      lastResetDate = new Date(parseInt(storedReset));
-    } else {
-      lastResetDate = new Date();
-      lastResetDate.setHours(0, 0, 0, 0);
-      localStorage.setItem('artdeface_last_reset', lastResetDate.getTime());
+    syncInProgress = false;
+    
+    if (pendingSync) {
+      pendingSync = false;
+      syncFromCloud();
     }
     
     checkAndResetRanking();
@@ -38,9 +64,41 @@
     startResetTimer();
   }
 
-  function saveToStorage() {
-    localStorage.setItem('artdeface_entries_v2', JSON.stringify(defaceEntries));
-    localStorage.setItem('artdeface_hacker_stats', JSON.stringify(hackerStats));
+  function loadLocalBackup() {
+    const backup = localStorage.getItem('artdeface_backup');
+    if (backup) {
+      try {
+        const data = JSON.parse(backup);
+        if (data.defaceEntries) defaceEntries = data.defaceEntries;
+        if (data.hackerStats) hackerStats = data.hackerStats;
+        if (data.lastResetDate) lastResetDate = data.lastResetDate;
+      } catch(e) {}
+    }
+  }
+
+  async function syncToCloud() {
+    try {
+      const cloudData = {
+        defaceEntries: defaceEntries,
+        hackerStats: hackerStats,
+        lastResetDate: lastResetDate,
+        lastUpdated: new Date().toISOString()
+      };
+      
+      await fetch(API_URL, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Master-Key': API_KEY
+        },
+        body: JSON.stringify(cloudData)
+      });
+      
+      localStorage.setItem('artdeface_backup', JSON.stringify({ defaceEntries, hackerStats, lastResetDate }));
+    } catch (e) {
+      console.log('Sync to cloud failed, saved locally only');
+      localStorage.setItem('artdeface_backup', JSON.stringify({ defaceEntries, hackerStats, lastResetDate }));
+    }
   }
 
   function checkAndResetRanking() {
@@ -49,17 +107,16 @@
     today.setHours(0, 0, 0, 0);
     
     if (!lastResetDate) {
-      lastResetDate = today;
-      localStorage.setItem('artdeface_last_reset', lastResetDate.getTime());
+      lastResetDate = today.getTime();
+      syncToCloud();
       return;
     }
     
     const lastReset = new Date(lastResetDate);
     if (now.getTime() - lastReset.getTime() >= 24 * 60 * 60 * 1000) {
       hackerStats = {};
-      lastResetDate = today;
-      localStorage.setItem('artdeface_last_reset', lastResetDate.getTime());
-      saveToStorage();
+      lastResetDate = today.getTime();
+      syncToCloud();
     }
   }
 
@@ -70,8 +127,7 @@
     
     if (lastResetDate && (now.getTime() - new Date(lastResetDate).getTime() >= 24 * 60 * 60 * 1000)) {
       hackerStats = {};
-      lastResetDate = today;
-      localStorage.setItem('artdeface_last_reset', lastResetDate.getTime());
+      lastResetDate = today.getTime();
     }
     
     const cleanName = escapeHtmlSimple(hackerName.toLowerCase());
@@ -79,7 +135,7 @@
       hackerStats[cleanName] = 0;
     }
     hackerStats[cleanName]++;
-    saveToStorage();
+    syncToCloud();
     renderRanked();
   }
 
@@ -131,7 +187,7 @@
     const flags = {
       'US': 'US', 'BR': 'BR', 'GB': 'GB', 'DE': 'DE', 'FR': 'FR', 'IT': 'IT',
       'ES': 'ES', 'PT': 'PT', 'NL': 'NL', 'RU': 'RU', 'CN': 'CN', 'JP': 'JP',
-      'AU': 'AU', 'CA': 'CA', 'IN': 'IN', 'Unknown': 'XX'
+      'AU': 'AU', 'CA': 'CA', 'IN': 'IN'
     };
     return flags[countryCode] || 'XX';
   }
@@ -391,7 +447,7 @@
   function isSpamDetected(hackerName, teamName, url) {
     const now = Date.now();
     const recentEntries = defaceEntries.filter(entry => 
-      now - entry.timestampMs < 60 * 1000
+      now - (entry.timestampMs || 0) < 60 * 1000
     );
     
     const sameHacker = recentEntries.filter(entry => 
@@ -448,7 +504,7 @@
     setInterval(updateTimer, 1000);
   }
 
-  function handleSendNotify() {
+  async function handleSendNotify() {
     const notifyNameInput = document.getElementById('notifyName');
     const teamNameInput = document.getElementById('teamName');
     const targetUrlInput = document.getElementById('targetUrl');
@@ -526,10 +582,11 @@
     };
 
     defaceEntries.unshift(newEntry);
-    saveToStorage();
+    await syncToCloud();
+    updateHackerStats(cleanedNotify);
     renderArchives();
     renderHome();
-    updateHackerStats(cleanedNotify);
+    renderRanked();
 
     notifyNameInput.value = '';
     teamNameInput.value = '';
@@ -584,10 +641,8 @@
     if (e.target === modal) modal.style.display = 'none';
   });
 
-  loadFromStorage();
+  syncFromCloud();
   setInterval(() => {
-    renderHome();
-    checkAndResetRanking();
-    renderRanked();
-  }, 300000);
+    syncFromCloud();
+  }, 30000);
 })();
