@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>ArtDeface</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <nav class="nav">
+      <button class="nav-btn active" data-page="home">home</button>
+      <button class="nav-btn" data-page="notify">notify</button>
+      <button class="nav-btn" data-page="archives">archives</button>
+      <button class="nav-btn" data-page="ranked">ranked</button>
+    </nav>
+
+    <div id="home" class="page active">
+      <div class="top-title">
+        <h1 class="artdeface">ArtDeface</h1>
+        <p class="visual-tag">visualization</p>
+      </div>
+      <div class="warning-banner">
+        [WARNING] WE ARE NOT RESPONSIBLE FOR USER SUBMITTED CONTENT
+      </div>
+      <div class="recent-title">recent defaces</div>
+      <div class="table-wrapper">
+        <table class="deface-table">
+          <thead>
+            <tr>
+              <th>team</th>
+              <th>hacker</th>
+              <th>domain</th>
+              <th>mirror</th>
+            </tr>
+          </thead>
+          <tbody id="homeTableBody">
+            <tr class="empty-row">
+              <td colspan="4">no defaces yet</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="bottom-text">
+        <p class="description">
+          We are ART of Deface, a website that stores your defaces and attacks on websites. 
+          We are a small site, please excuse any bugs.
+        </p>
+      </div>
+    </div>
+
+    <div id="notify" class="page">
+      <div class="top-title">
+        <h1 class="artdeface">notify</h1>
+      </div>
+      <div class="form-wrapper">
+        <div class="form-row">
+          <div class="form-label">hacker</div>
+          <input type="text" class="form-input" id="notifyName" placeholder="hacker name" maxlength="50">
+        </div>
+        <div class="form-row">
+          <div class="form-label">team</div>
+          <input type="text" class="form-input" id="teamName" placeholder="team name" maxlength="50">
+        </div>
+        <div class="form-row">
+          <div class="form-label">site</div>
+          <input type="text" class="form-input" id="targetUrl" placeholder="https://..." maxlength="230">
+        </div>
+        <button class="btn btn-full" id="sendNotifyBtn">send notify</button>
+        <div id="notifyMessage" class="notify-message"></div>
+      </div>
+    </div>
+
+    <div id="archives" class="page">
+      <div class="top-title">
+        <h1 class="artdeface">archives</h1>
+      </div>
+      <div class="stats">
+        total defaces: <span id="totalCount">0</span>
+      </div>
+      <div class="table-wrapper">
+        <table class="deface-table">
+          <thead>
+            <tr>
+              <th>team</th>
+              <th>hacker</th>
+              <th>domain</th>
+              <th>mirror</th>
+            </tr>
+          </thead>
+          <tbody id="archivesTableBody">
+            <tr class="empty-row">
+              <td colspan="4">no defaces yet</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="legal-note">
+        We are a small site, please excuse any bugs.
+      </div>
+    </div>
+
+    <div id="ranked" class="page">
+      <div class="top-title">
+        <h1 class="artdeface">ranked</h1>
+      </div>
+      <div class="ranked-stats">
+        <div class="ranked-period">ranking based on last 24 hours</div>
+        <div class="ranked-reset">next reset: <span id="resetTimer">--:--:--</span></div>
+      </div>
+      <div class="table-wrapper">
+        <table class="deface-table ranked-table">
+          <thead>
+            <tr>
+              <th>rank</th>
+              <th>hacker</th>
+              <th>notify count</th>
+            </tr>
+          </thead>
+          <tbody id="rankedTableBody">
+            <tr class="empty-row">
+              <td colspan="3">no data available</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="mirrorModal" class="modal">
+    <div class="modal-content">
+      <span class="modal-close">&times;</span>
+      <div id="mirrorInfo"></div>
+    </div>
+  </div>
+
+  <script src="backend.js"></script>
+</body>
+</html>
