@@ -20,8 +20,8 @@ body {
 
 .nav {
   display: flex;
-  justify-content: center;
-  gap: 1rem;
+ justify-content: center;
+  gap: 0.8rem;
   margin-bottom: 2rem;
   border-bottom: 1px solid rgba(255,255,255,0.2);
   padding-bottom: 1rem;
@@ -33,12 +33,12 @@ body {
   border: none;
   color: #ffffff;
   font-family: inherit;
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   cursor: pointer;
-  padding: 0.5rem 1rem;
+  padding: 0.5rem 0.8rem;
   opacity: 0.6;
   transition: all 0.2s ease;
   display: flex;
@@ -53,10 +53,6 @@ body {
 
 .nav-btn:hover {
   opacity: 1;
-}
-
-.nav-icon {
-  display: inline-block;
 }
 
 .page {
@@ -365,6 +361,69 @@ body {
 .profiles-table th:nth-child(3),
 .profiles-table td:nth-child(3) { text-align: center; }
 
+.profile-share {
+  max-width: 500px;
+  margin: 0 auto 2rem auto;
+  padding: 1rem;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 8px;
+}
+
+.share-link-container {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.share-input {
+  flex: 1;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.3);
+  color: #ffffff;
+  font-family: monospace;
+  font-size: 0.75rem;
+  padding: 0.5rem;
+  outline: none;
+}
+
+.share-btn {
+  background: transparent;
+  border: 1px solid #ffffff;
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 0.7rem;
+  padding: 0.3rem 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.share-btn:hover {
+  background-color: #ffffff;
+  color: #000000;
+}
+
+.share-note {
+  font-size: 0.65rem;
+  opacity: 0.5;
+  text-align: center;
+}
+
+.register-link {
+  text-align: center;
+  margin-top: 1rem;
+}
+
+.register-link span {
+  font-size: 0.75rem;
+  opacity: 0.6;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.register-link span:hover {
+  opacity: 1;
+}
+
 .modal {
   display: none;
   position: fixed;
@@ -417,9 +476,8 @@ body {
 
 @media (max-width: 700px) {
   body { padding: 1rem; }
-  .nav { gap: 0.5rem; }
-  .nav-btn { font-size: 0.7rem; padding: 0.3rem 0.6rem; }
-  .nav-icon { width: 14px; height: 14px; }
+  .nav { gap: 0.3rem; }
+  .nav-btn { font-size: 0.65rem; padding: 0.3rem 0.5rem; }
   .deface-table th, .deface-table td { font-size: 0.65rem; padding: 0.4rem 0.2rem; }
   .team-cell { white-space: normal; }
   .form-row { flex-direction: column; gap: 0.3rem; margin-bottom: 1rem; }
@@ -429,4 +487,5 @@ body {
   .mirror-label { width: 70px; font-size: 0.65rem; }
   .mirror-value { font-size: 0.75rem; }
   .preview-frame { height: 200px; }
+  .share-link-container { flex-direction: column; }
 }
