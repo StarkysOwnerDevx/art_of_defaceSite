@@ -1,391 +1,255 @@
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+import { getDatabase, ref, get, set, query, orderByChild, limitToLast } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyA3KGM_iDgn_tWF1eHLAwNXdncr7Re6XQo",
+  authDomain: "artdeface-42cde.firebaseapp.com",
+  databaseURL: "https://artdeface-42cde-default-rtdb.firebaseio.com",
+  projectId: "artdeface-42cde",
+  storageBucket: "artdeface-42cde.firebasestorage.app",
+  messagingSenderId: "762578785414",
+  appId: "1:762578785414:web:6e7e87dcbcc6cff5d92d07",
+  measurementId: "G-HT4E5JG9B6"
+};
+
+const app = initializeApp(firebaseConfig);
+const database = getDatabase(app);
+
 (function() {
   let defaceEntries = [];
   let hackerStats = {};
   let lastResetDate = null;
-  let syncInProgress = false;
-  let pendingSync = false;
+  let currentSearchTerm = '';
 
-  const API_BIN_ID = '6749e1d2ad19ca34f874c545';
-  const API_KEY = '$2a$10$WjFJQpK9XxL8yM3nV5pQ7OeR6tY8uI0oP2aZ3xC4vB5nM6lK9jH';
-  const API_URL = 'https://api.jsonbin.io/v3/b/' + API_BIN_ID;
-
-  async function syncFromCloud() {
-    if (syncInProgress) {
-      pendingSync = true;
-      return;
-    }
-    
-    syncInProgress = true;
-    
+  async function loadFromFirebase() {
     try {
-      const response = await fetch(API_URL, {
-        headers: {
-          'X-Master-Key': API_KEY
-        }
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        const cloudData = data.record;
-        
-        if (cloudData) {
-          if (cloudData.defaceEntries && Array.isArray(cloudData.defaceEntries)) {
-            defaceEntries = cloudData.defaceEntries;
-          }
-          if (cloudData.hackerStats) {
-            hackerStats = cloudData.hackerStats;
-          }
-          if (cloudData.lastResetDate) {
-            lastResetDate = cloudData.lastResetDate;
-          }
-          
-          localStorage.setItem('artdeface_backup', JSON.stringify({ defaceEntries, hackerStats, lastResetDate }));
-        }
-      } else {
-        console.log('Cloud sync failed, using local backup');
-        loadLocalBackup();
+      const defacesRef = ref(database, 'defaces');
+      const defacesSnapshot = await get(query(defacesRef, orderByChild('timestampMs'), limitToLast(500)));
+      defaceEntries = [];
+      if (defacesSnapshot.exists()) {
+        defacesSnapshot.forEach(child => { defaceEntries.unshift(child.val()); });
       }
-    } catch (e) {
-      console.log('Network error, using local backup');
-      loadLocalBackup();
-    }
-    
-    syncInProgress = false;
-    
-    if (pendingSync) {
-      pendingSync = false;
-      syncFromCloud();
-    }
-    
-    checkAndResetRanking();
-    renderArchives();
-    renderHome();
-    renderRanked();
-    startResetTimer();
-  }
-
-  function loadLocalBackup() {
-    const backup = localStorage.getItem('artdeface_backup');
-    if (backup) {
-      try {
-        const data = JSON.parse(backup);
-        if (data.defaceEntries) defaceEntries = data.defaceEntries;
-        if (data.hackerStats) hackerStats = data.hackerStats;
-        if (data.lastResetDate) lastResetDate = data.lastResetDate;
-      } catch(e) {}
+      const statsRef = ref(database, 'stats_hacker');
+      const statsSnapshot = await get(statsRef);
+      hackerStats = statsSnapshot.exists() ? statsSnapshot.val() : {};
+      const resetRef = ref(database, 'stats_lastReset');
+      const resetSnapshot = await get(resetRef);
+      if (resetSnapshot.exists()) {
+        lastResetDate = resetSnapshot.val();
+      } else {
+        lastResetDate = new Date().setHours(0,0,0,0);
+        await set(ref(database, 'stats_lastReset'), lastResetDate);
+      }
+      checkAndResetRanking();
+      renderArchives();
+      renderHome();
+      renderRanked();
+      renderProfiles();
+      startResetTimer();
+    } catch(e) {
+      console.error('Firebase error:', e);
+      document.getElementById('homeTableBody').innerHTML = '<tr class="empty-row"><td colspan="4">connection error... refresh</td></tr>';
     }
   }
 
-  async function syncToCloud() {
+  async function addToFirebase(entry) {
+    try { await set(ref(database, 'defaces/' + entry.id), entry); }
+    catch(e) { console.error('Save error:', e); throw e; }
+  }
+
+  async function updateStatsInFirebase() {
     try {
-      const cloudData = {
-        defaceEntries: defaceEntries,
-        hackerStats: hackerStats,
-        lastResetDate: lastResetDate,
-        lastUpdated: new Date().toISOString()
-      };
-      
-      await fetch(API_URL, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Master-Key': API_KEY
-        },
-        body: JSON.stringify(cloudData)
-      });
-      
-      localStorage.setItem('artdeface_backup', JSON.stringify({ defaceEntries, hackerStats, lastResetDate }));
-    } catch (e) {
-      console.log('Sync to cloud failed, saved locally only');
-      localStorage.setItem('artdeface_backup', JSON.stringify({ defaceEntries, hackerStats, lastResetDate }));
-    }
+      await set(ref(database, 'stats_hacker'), hackerStats);
+      await set(ref(database, 'stats_lastReset'), lastResetDate);
+    } catch(e) { console.error('Stats update error:', e); }
   }
 
   function checkAndResetRanking() {
     const now = new Date();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    if (!lastResetDate) {
-      lastResetDate = today.getTime();
-      syncToCloud();
-      return;
-    }
-    
+    const today = new Date(); today.setHours(0,0,0,0);
+    if (!lastResetDate) { lastResetDate = today.getTime(); updateStatsInFirebase(); return; }
     const lastReset = new Date(lastResetDate);
-    if (now.getTime() - lastReset.getTime() >= 24 * 60 * 60 * 1000) {
+    if (now.getTime() - lastReset.getTime() >= 24*60*60*1000) {
       hackerStats = {};
       lastResetDate = today.getTime();
-      syncToCloud();
+      updateStatsInFirebase();
     }
   }
 
   function updateHackerStats(hackerName) {
     const now = new Date();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    if (lastResetDate && (now.getTime() - new Date(lastResetDate).getTime() >= 24 * 60 * 60 * 1000)) {
+    const today = new Date(); today.setHours(0,0,0,0);
+    if (lastResetDate && (now.getTime() - new Date(lastResetDate).getTime() >= 24*60*60*1000)) {
       hackerStats = {};
       lastResetDate = today.getTime();
     }
-    
     const cleanName = escapeHtmlSimple(hackerName.toLowerCase());
-    if (!hackerStats[cleanName]) {
-      hackerStats[cleanName] = 0;
-    }
-    hackerStats[cleanName]++;
-    syncToCloud();
+    hackerStats[cleanName] = (hackerStats[cleanName] || 0) + 1;
+    updateStatsInFirebase();
     renderRanked();
+    renderProfiles();
   }
 
-  function getTopHackers(limit = 10) {
-    const entries = Object.entries(hackerStats);
-    entries.sort((a, b) => b[1] - a[1]);
-    return entries.slice(0, limit).map(([name, count]) => ({ name, count }));
+  function getTopHackers(limit=10) {
+    return Object.entries(hackerStats).sort((a,b)=>b[1]-a[1]).slice(0,limit).map(([name,count])=>({name,count}));
+  }
+
+  function getHackerProfiles() {
+    const profileMap = new Map();
+    for (const entry of defaceEntries) {
+      const hacker = entry.hacker;
+      const team = entry.teamDisplay;
+      if (!profileMap.has(hacker)) {
+        profileMap.set(hacker, { hacker, team: team === 'Anonymous' ? '-' : team, count: 0, lastTimestamp: 0 });
+      }
+      const profile = profileMap.get(hacker);
+      profile.count++;
+      if (entry.timestampMs > profile.lastTimestamp) {
+        profile.lastTimestamp = entry.timestampMs;
+        profile.team = team === 'Anonymous' ? '-' : team;
+      }
+    }
+    return Array.from(profileMap.values()).sort((a,b) => b.count - a.count);
   }
 
   function isSpecialDomain(url) {
-    const specialTLDs = ['.com.br', '.gov', '.gov.br', '.it', '.edu', '.edu.br', '.org', '.org.br', '.net', '.mil', '.mil.br'];
-    const lowerUrl = url.toLowerCase();
-    for (let tld of specialTLDs) {
-      if (lowerUrl.includes(tld)) {
-        return true;
-      }
-    }
-    return false;
+    const specialTLDs = ['.com.br','.gov','.gov.br','.it','.edu','.edu.br','.org','.org.br','.net','.mil','.mil.br'];
+    return specialTLDs.some(tld => url.toLowerCase().includes(tld));
   }
 
   function extractDomain(url) {
     try {
       const urlObj = new URL(url);
       let hostname = urlObj.hostname;
-      if (hostname.startsWith('www.')) {
-        hostname = hostname.substring(4);
-      }
+      if (hostname.startsWith('www.')) hostname = hostname.substring(4);
       return hostname;
-    } catch {
-      return url;
-    }
+    } catch { return url; }
   }
 
   function getIpInfo(domain) {
-    return fetch(`https://cloudflare-dns.com/dns-query?name=${domain}&type=A`, {
-      headers: { 'Accept': 'application/dns-json' }
-    })
-    .then(res => res.json())
-    .catch(() => null);
+    return fetch(`https://cloudflare-dns.com/dns-query?name=${domain}&type=A`, { headers: { 'Accept': 'application/dns-json' } }).then(res=>res.json()).catch(()=>null);
   }
 
   function getCountryCode(ip) {
-    return fetch(`https://ipapi.co/${ip}/json/`)
-      .then(res => res.json())
-      .catch(() => null);
+    return fetch(`https://ipapi.co/${ip}/json/`).then(res=>res.json()).catch(()=>null);
   }
 
   function getFlag(countryCode) {
-    const flags = {
-      'US': 'US', 'BR': 'BR', 'GB': 'GB', 'DE': 'DE', 'FR': 'FR', 'IT': 'IT',
-      'ES': 'ES', 'PT': 'PT', 'NL': 'NL', 'RU': 'RU', 'CN': 'CN', 'JP': 'JP',
-      'AU': 'AU', 'CA': 'CA', 'IN': 'IN'
-    };
+    const flags = { 'US':'US','BR':'BR','GB':'GB','DE':'DE','FR':'FR','IT':'IT','ES':'ES','PT':'PT','NL':'NL','RU':'RU','CN':'CN','JP':'JP','AU':'AU','CA':'CA','IN':'IN' };
     return flags[countryCode] || 'XX';
   }
 
   function showMirrorModal(url, domain, hacker, team) {
     const modal = document.getElementById('mirrorModal');
     const mirrorInfo = document.getElementById('mirrorInfo');
-    
     mirrorInfo.innerHTML = '<div class="mirror-loading">loading mirror information...</div>';
     modal.style.display = 'block';
-    
     const timestamp = new Date().toLocaleString();
-    
     getIpInfo(domain).then(dnsData => {
-      let ip = 'unable to resolve';
-      let country = 'Unknown';
-      let flag = 'XX';
-      
+      let ip = 'unable to resolve', country = 'Unknown', flag = 'XX';
       if (dnsData && dnsData.Answer && dnsData.Answer.length > 0) {
         ip = dnsData.Answer[0].data;
         getCountryCode(ip).then(geoData => {
-          if (geoData && geoData.country_name) {
-            country = geoData.country_name;
-            const code = geoData.country_code || 'XX';
-            flag = getFlag(code);
-          }
-          renderMirrorContent();
-        }).catch(() => renderMirrorContent());
-      } else {
-        renderMirrorContent();
+          if (geoData && geoData.country_name) { country = geoData.country_name; flag = getFlag(geoData.country_code || 'XX'); }
+          renderMirror();
+        }).catch(()=>renderMirror());
+      } else { renderMirror(); }
+      function renderMirror() {
+        mirrorInfo.innerHTML = `<div class="mirror-info-row"><span class="mirror-label">date</span><span class="mirror-value">${escapeHtmlSimple(timestamp)}</span></div>
+          <div class="mirror-info-row"><span class="mirror-label">system</span><span class="mirror-value">Linux</span></div>
+          <div class="mirror-info-row"><span class="mirror-label">hacker</span><span class="mirror-value">${escapeHtmlSimple(hacker)}</span></div>
+          <div class="mirror-info-row"><span class="mirror-label">team</span><span class="mirror-value">${escapeHtmlSimple(team)}</span></div>
+          <div class="mirror-info-row"><span class="mirror-label">ip address</span><span class="mirror-value">${escapeHtmlSimple(ip)}</span></div>
+          <div class="mirror-info-row"><span class="mirror-label">country</span><span class="mirror-value"><span class="flag-icon">${flag}</span> <span class="country-name">${escapeHtmlSimple(country)}</span></span></div>
+          <div class="mirror-info-row"><span class="mirror-label">domain</span><span class="mirror-value"><a href="${escapeHtmlSimple(url)}" target="_blank">${escapeHtmlSimple(domain)}</a></span></div>
+          <div class="mirror-info-row"><span class="mirror-label">preview</span><iframe class="preview-frame" src="${escapeHtmlSimple(url)}" sandbox="allow-same-origin allow-scripts allow-popups allow-forms" referrerpolicy="no-referrer" title="mirror preview"></iframe></div>
+          <div class="mirror-info-row"><span class="mirror-label">note</span><span class="mirror-value">this mirror is for archival purposes only</span></div>`;
       }
-      
-      function renderMirrorContent() {
-        mirrorInfo.innerHTML = `
-          <div class="mirror-info-row">
-            <span class="mirror-label">date</span>
-            <span class="mirror-value">${escapeHtmlSimple(timestamp)}</span>
-          </div>
-          <div class="mirror-info-row">
-            <span class="mirror-label">system</span>
-            <span class="mirror-value">Linux</span>
-          </div>
-          <div class="mirror-info-row">
-            <span class="mirror-label">hacker</span>
-            <span class="mirror-value">${escapeHtmlSimple(hacker)}</span>
-          </div>
-          <div class="mirror-info-row">
-            <span class="mirror-label">team</span>
-            <span class="mirror-value">${escapeHtmlSimple(team)}</span>
-          </div>
-          <div class="mirror-info-row">
-            <span class="mirror-label">ip address</span>
-            <span class="mirror-value">${escapeHtmlSimple(ip)}</span>
-          </div>
-          <div class="mirror-info-row">
-            <span class="mirror-label">country</span>
-            <span class="mirror-value"><span class="flag-icon">${flag}</span> <span class="country-name">${escapeHtmlSimple(country)}</span></span>
-          </div>
-          <div class="mirror-info-row">
-            <span class="mirror-label">domain</span>
-            <span class="mirror-value"><a href="${escapeHtmlSimple(url)}" target="_blank" rel="noopener noreferrer">${escapeHtmlSimple(domain)}</a></span>
-          </div>
-          <div class="mirror-info-row">
-            <span class="mirror-label">preview</span>
-            <iframe class="preview-frame" src="${escapeHtmlSimple(url)}" sandbox="allow-same-origin allow-scripts allow-popups allow-forms" referrerpolicy="no-referrer" title="mirror preview"></iframe>
-          </div>
-          <div class="mirror-info-row">
-            <span class="mirror-label">note</span>
-            <span class="mirror-value">this mirror is for archival purposes only</span>
-          </div>
-        `;
-      }
-    }).catch(() => {
-      mirrorInfo.innerHTML = `
-        <div class="mirror-info-row">
-          <span class="mirror-label">date</span>
-          <span class="mirror-value">${escapeHtmlSimple(timestamp)}</span>
-        </div>
-        <div class="mirror-info-row">
-          <span class="mirror-label">system</span>
-          <span class="mirror-value">Linux</span>
-        </div>
-        <div class="mirror-info-row">
-          <span class="mirror-label">hacker</span>
-          <span class="mirror-value">${escapeHtmlSimple(hacker)}</span>
-        </div>
-        <div class="mirror-info-row">
-          <span class="mirror-label">team</span>
-          <span class="mirror-value">${escapeHtmlSimple(team)}</span>
-        </div>
-        <div class="mirror-info-row">
-          <span class="mirror-label">ip address</span>
-          <span class="mirror-value">unable to resolve</span>
-        </div>
-        <div class="mirror-info-row">
-          <span class="mirror-label">country</span>
-          <span class="mirror-value"><span class="flag-icon">XX</span> Unknown</span>
-        </div>
-        <div class="mirror-info-row">
-          <span class="mirror-label">domain</span>
-          <span class="mirror-value"><a href="${escapeHtmlSimple(url)}" target="_blank" rel="noopener noreferrer">${escapeHtmlSimple(domain)}</a></span>
-        </div>
-        <div class="mirror-info-row">
-          <span class="mirror-label">preview</span>
-          <iframe class="preview-frame" src="${escapeHtmlSimple(url)}" sandbox="allow-same-origin allow-scripts allow-popups allow-forms" referrerpolicy="no-referrer" title="mirror preview"></iframe>
-        </div>
-      `;
+    }).catch(()=>{
+      mirrorInfo.innerHTML = `<div class="mirror-info-row"><span class="mirror-label">date</span><span class="mirror-value">${escapeHtmlSimple(timestamp)}</span></div>
+        <div class="mirror-info-row"><span class="mirror-label">system</span><span class="mirror-value">Linux</span></div>
+        <div class="mirror-info-row"><span class="mirror-label">hacker</span><span class="mirror-value">${escapeHtmlSimple(hacker)}</span></div>
+        <div class="mirror-info-row"><span class="mirror-label">team</span><span class="mirror-value">${escapeHtmlSimple(team)}</span></div>
+        <div class="mirror-info-row"><span class="mirror-label">ip address</span><span class="mirror-value">unable to resolve</span></div>
+        <div class="mirror-info-row"><span class="mirror-label">country</span><span class="mirror-value"><span class="flag-icon">XX</span> Unknown</span></div>
+        <div class="mirror-info-row"><span class="mirror-label">domain</span><span class="mirror-value"><a href="${escapeHtmlSimple(url)}" target="_blank">${escapeHtmlSimple(domain)}</a></span></div>
+        <div class="mirror-info-row"><span class="mirror-label">preview</span><iframe class="preview-frame" src="${escapeHtmlSimple(url)}" sandbox="allow-same-origin allow-scripts allow-popups allow-forms" referrerpolicy="no-referrer" title="mirror preview"></iframe></div>`;
     });
   }
 
+  function domainWithIcon(domain, url, isSpecial) {
+    const starHtml = isSpecial ? '<span class="star">*</span>' : '';
+    const icon = `<svg class="domain-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
+    return `<td class="domain-cell">${starHtml}${icon}<a href="${escapeHtmlSimple(url)}" target="_blank" rel="noopener noreferrer">${escapeHtmlSimple(domain)}</a></td>`;
+  }
+
   function renderHome() {
-    const tableBody = document.getElementById('homeTableBody');
-    if (!tableBody) return;
-
-    const recentEntries = defaceEntries.slice(0, 5);
-
-    if (recentEntries.length === 0) {
-      tableBody.innerHTML = '<tr class="empty-row"><td colspan="4">no defaces yet</td></tr>';
-      return;
-    }
-
+    const tbody = document.getElementById('homeTableBody');
+    if (!tbody) return;
+    const recent = defaceEntries.slice(0,5);
+    if (recent.length === 0) { tbody.innerHTML = '<tr class="empty-row"><td colspan="4">no defaces yet</td></tr>'; return; }
     let html = '';
-    for (let i = 0; i < recentEntries.length; i++) {
-      const entry = recentEntries[i];
-      const domain = extractDomain(entry.url);
-      const starHtml = entry.isSpecial ? '<span class="star">*</span>' : '';
-      
-      html += `
-        <tr>
-          <td class="team-cell">${escapeHtmlSimple(entry.teamDisplay)}</td>
-          <td>${escapeHtmlSimple(entry.hacker)}</td>
-          <td class="domain-cell">${starHtml}<a href="${escapeHtmlSimple(entry.url)}" target="_blank" rel="noopener noreferrer">${escapeHtmlSimple(domain)}</a></td>
-          <td><span class="mirror-link" data-url="${escapeHtmlSimple(entry.url)}" data-domain="${escapeHtmlSimple(domain)}" data-hacker="${escapeHtmlSimple(entry.hacker)}" data-team="${escapeHtmlSimple(entry.teamDisplay)}">mirror</span></td>
-        </tr>
-      `;
+    for (const e of recent) {
+      const domain = extractDomain(e.url);
+      html += `<tr><td class="team-cell">${escapeHtmlSimple(e.teamDisplay)}</td><td>${escapeHtmlSimple(e.hacker)}</td>${domainWithIcon(domain, e.url, e.isSpecial)}<td><span class="mirror-link" data-url="${escapeHtmlSimple(e.url)}" data-domain="${escapeHtmlSimple(domain)}" data-hacker="${escapeHtmlSimple(e.hacker)}" data-team="${escapeHtmlSimple(e.teamDisplay)}">mirror</span></td></tr>`;
     }
-    tableBody.innerHTML = html;
+    tbody.innerHTML = html;
     attachMirrorEvents();
   }
 
   function renderArchives() {
-    const tableBody = document.getElementById('archivesTableBody');
+    const tbody = document.getElementById('archivesTableBody');
     const totalSpan = document.getElementById('totalCount');
-    
-    if (!tableBody) return;
-
-    if (defaceEntries.length === 0) {
-      tableBody.innerHTML = '<tr class="empty-row"><td colspan="4">no defaces yet</td></tr>';
-      if (totalSpan) totalSpan.textContent = '0';
+    const resultSpan = document.getElementById('searchResultCount');
+    if (!tbody) return;
+    let filtered = defaceEntries;
+    if (currentSearchTerm) {
+      const term = currentSearchTerm.toLowerCase();
+      filtered = defaceEntries.filter(e => e.hacker.toLowerCase().includes(term) || e.teamDisplay.toLowerCase().includes(term) || e.url.toLowerCase().includes(term));
+    }
+    if (filtered.length === 0) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="4">no defaces found</td></tr>';
+      if (totalSpan) totalSpan.textContent = defaceEntries.length;
+      if (resultSpan) resultSpan.textContent = filtered.length !== defaceEntries.length ? `(showing ${filtered.length})` : '';
       return;
     }
-
     if (totalSpan) totalSpan.textContent = defaceEntries.length;
-
+    if (resultSpan) resultSpan.textContent = filtered.length !== defaceEntries.length ? `(showing ${filtered.length})` : '';
     let html = '';
-    for (let i = 0; i < defaceEntries.length; i++) {
-      const entry = defaceEntries[i];
-      const domain = extractDomain(entry.url);
-      const starHtml = entry.isSpecial ? '<span class="star">*</span>' : '';
-      
-      html += `
-        <tr>
-          <td class="team-cell">${escapeHtmlSimple(entry.teamDisplay)}</td>
-          <td>${escapeHtmlSimple(entry.hacker)}</td>
-          <td class="domain-cell">${starHtml}<a href="${escapeHtmlSimple(entry.url)}" target="_blank" rel="noopener noreferrer">${escapeHtmlSimple(domain)}</a></td>
-          <td><span class="mirror-link" data-url="${escapeHtmlSimple(entry.url)}" data-domain="${escapeHtmlSimple(domain)}" data-hacker="${escapeHtmlSimple(entry.hacker)}" data-team="${escapeHtmlSimple(entry.teamDisplay)}">mirror</span></td>
-        </tr>
-      `;
+    for (const e of filtered) {
+      const domain = extractDomain(e.url);
+      html += `<tr><td class="team-cell">${escapeHtmlSimple(e.teamDisplay)}</td><td>${escapeHtmlSimple(e.hacker)}</td>${domainWithIcon(domain, e.url, e.isSpecial)}<td><span class="mirror-link" data-url="${escapeHtmlSimple(e.url)}" data-domain="${escapeHtmlSimple(domain)}" data-hacker="${escapeHtmlSimple(e.hacker)}" data-team="${escapeHtmlSimple(e.teamDisplay)}">mirror</span></td></tr>`;
     }
-    tableBody.innerHTML = html;
+    tbody.innerHTML = html;
     attachMirrorEvents();
   }
 
   function renderRanked() {
-    const tableBody = document.getElementById('rankedTableBody');
-    if (!tableBody) return;
-    
-    const topHackers = getTopHackers(10);
-    
-    if (topHackers.length === 0) {
-      tableBody.innerHTML = '<tr class="empty-row"><td colspan="3">no data available</td></tr>';
-      return;
-    }
-    
+    const tbody = document.getElementById('rankedTableBody');
+    if (!tbody) return;
+    const top = getTopHackers(10);
+    if (top.length === 0) { tbody.innerHTML = '<tr class="empty-row"><td colspan="3">no data available</td></tr>'; return; }
     let html = '';
-    for (let i = 0; i < topHackers.length; i++) {
-      const hacker = topHackers[i];
-      const rank = i + 1;
-      const rankDisplay = rank === 1 ? '#' + rank : rank;
-      html += `
-        <tr>
-          <td>${rankDisplay}</td>
-          <td>${escapeHtmlSimple(hacker.name)}</td>
-          <td>${hacker.count}</td>
-        </tr>
-      `;
+    for (let i=0; i<top.length; i++) {
+      const rank = i+1;
+      html += `<tr><td>#${rank}</td><td>${escapeHtmlSimple(top[i].name)}</td><td>${top[i].count}</td></tr>`;
     }
-    tableBody.innerHTML = html;
+    tbody.innerHTML = html;
+  }
+
+  function renderProfiles() {
+    const tbody = document.getElementById('profilesTableBody');
+    const totalSpan = document.getElementById('totalHackersCount');
+    if (!tbody) return;
+    const profiles = getHackerProfiles();
+    if (totalSpan) totalSpan.textContent = profiles.length;
+    if (profiles.length === 0) { tbody.innerHTML = '<tr class="empty-row"><td colspan="4">no hackers yet</td></tr>'; return; }
+    let html = '';
+    for (const p of profiles) {
+      const lastDate = p.lastTimestamp ? new Date(p.lastTimestamp).toLocaleDateString() : '-';
+      html += `<tr><td>${escapeHtmlSimple(p.hacker)}</td><td>${escapeHtmlSimple(p.team)}</td><td>${p.count}</td><td>${lastDate}</td></tr>`;
+    }
+    tbody.innerHTML = html;
   }
 
   function attachMirrorEvents() {
@@ -394,7 +258,6 @@
       el.addEventListener('click', mirrorHandler);
     });
   }
-
   function mirrorHandler(e) {
     const url = e.currentTarget.getAttribute('data-url');
     const domain = e.currentTarget.getAttribute('data-domain');
@@ -403,246 +266,93 @@
     showMirrorModal(url, domain, hacker, team);
   }
 
-  function escapeHtmlSimple(str) {
-    if (!str) return '';
-    return str.replace(/[&<>]/g, function(m) {
-      if (m === '&') return '&amp;';
-      if (m === '<') return '&lt;';
-      if (m === '>') return '&gt;';
-      return m;
-    });
-  }
-
-  function sanitizeInput(str) {
-    if (!str) return '';
-    let cleaned = str.replace(/[<>]/g, '');
-    cleaned = cleaned.replace(/javascript:/gi, '');
-    cleaned = cleaned.replace(/on\w+=/gi, '');
-    cleaned = cleaned.replace(/\\/g, '');
-    cleaned = cleaned.replace(/['";]/g, '');
-    cleaned = cleaned.trim();
-    if (cleaned.length > 200) {
-      cleaned = cleaned.substring(0, 200);
-    }
-    return cleaned;
-  }
-
-  function isValidUrl(str) {
-    if (!str) return false;
-    if (str.length > 230) return false;
-    try {
-      const url = new URL(str);
-      return url.protocol === 'http:' || url.protocol === 'https:';
-    } catch {
-      return false;
-    }
-  }
-
-  function isValidName(str) {
-    if (!str || str.length < 2) return false;
-    const nameRegex = /^[a-zA-Z0-9\s\-_.]{2,50}$/;
-    return nameRegex.test(str);
-  }
-
-  function isSpamDetected(hackerName, teamName, url) {
-    const now = Date.now();
-    const recentEntries = defaceEntries.filter(entry => 
-      now - (entry.timestampMs || 0) < 60 * 1000
-    );
-    
-    const sameHacker = recentEntries.filter(entry => 
-      entry.hacker.toLowerCase() === hackerName.toLowerCase()
-    ).length;
-    
-    if (sameHacker >= 3) return true;
-    
-    const sameUrl = recentEntries.filter(entry => 
-      entry.url === url
-    ).length;
-    
-    if (sameUrl >= 2) return true;
-    
+  function escapeHtmlSimple(str) { if (!str) return ''; return str.replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m])); }
+  function sanitizeInput(str) { if (!str) return ''; return str.replace(/[<>]/g,'').replace(/javascript:/gi,'').replace(/on\w+=/gi,'').replace(/\\/g,'').replace(/['";]/g,'').trim().slice(0,200); }
+  function isValidUrl(str) { if (!str || str.length>230) return false; try { const url=new URL(str); return url.protocol==='http:'||url.protocol==='https:'; } catch { return false; } }
+  function isValidName(str) { return str && str.length>=2 && str.length<=50 && /^[a-zA-Z0-9\s\-_.]{2,50}$/.test(str); }
+  function isSpamDetected(hackerName, url) {
+    const now=Date.now();
+    const recent=defaceEntries.filter(e=>now-(e.timestampMs||0)<60000);
+    if (recent.filter(e=>e.hacker.toLowerCase()===hackerName.toLowerCase()).length>=3) return true;
+    if (recent.filter(e=>e.url===url).length>=2) return true;
     return false;
   }
-
-  function showMessage(elementId, msg, isError = true) {
-    const msgDiv = document.getElementById(elementId);
-    if (!msgDiv) return;
-    msgDiv.textContent = msg;
-    msgDiv.style.color = isError ? '#ff5555' : '#55ff55';
-    setTimeout(() => {
-      if (msgDiv.textContent === msg) {
-        msgDiv.textContent = '';
-      }
-    }, 4000);
+  function showMessage(id, msg, isError=true) {
+    const div=document.getElementById(id); if(!div) return;
+    div.textContent=msg; div.style.color=isError?'#ff5555':'#55ff55';
+    setTimeout(()=>{ if(div.textContent===msg) div.textContent=''; },4000);
   }
-
   function startResetTimer() {
-    function updateTimer() {
-      const now = new Date();
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      tomorrow.setHours(0, 0, 0, 0);
-      
-      const diff = tomorrow - now;
-      if (diff <= 0) {
-        location.reload();
-        return;
-      }
-      
-      const hours = Math.floor(diff / (1000 * 60 * 60));
-      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-      
-      const timerSpan = document.getElementById('resetTimer');
-      if (timerSpan) {
-        timerSpan.textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-      }
+    function update(){
+      const tomorrow=new Date(); tomorrow.setDate(tomorrow.getDate()+1); tomorrow.setHours(0,0,0,0);
+      const diff=tomorrow-new Date();
+      if(diff<=0){ location.reload(); return; }
+      const h=Math.floor(diff/3600000), m=Math.floor((diff%3600000)/60000), s=Math.floor((diff%60000)/1000);
+      const timer=document.getElementById('resetTimer');
+      if(timer) timer.textContent=`${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
     }
-    
-    updateTimer();
-    setInterval(updateTimer, 1000);
+    update(); setInterval(update,1000);
   }
-
   async function handleSendNotify() {
-    const notifyNameInput = document.getElementById('notifyName');
-    const teamNameInput = document.getElementById('teamName');
-    const targetUrlInput = document.getElementById('targetUrl');
-
-    let rawNotify = notifyNameInput.value;
-    let rawTeam = teamNameInput.value;
-    let rawUrl = targetUrlInput.value;
-
-    if (rawUrl.length > 230) {
-      showMessage('notifyMessage', 'Error: URL exceeds 230 characters. Entry rejected.', true);
-      notifyNameInput.value = '';
-      teamNameInput.value = '';
-      targetUrlInput.value = '';
-      return;
-    }
-
-    let cleanedNotify = sanitizeInput(rawNotify);
-    let cleanedTeam = sanitizeInput(rawTeam);
-    let cleanedUrl = rawUrl ? rawUrl.trim() : '';
-
-    if (!cleanedNotify || cleanedNotify.length < 2) {
-      showMessage('notifyMessage', 'Error: Hacker name must be at least 2 characters', true);
-      return;
-    }
-
-    if (!isValidName(cleanedNotify)) {
-      showMessage('notifyMessage', 'Error: Hacker name contains invalid characters', true);
-      return;
-    }
-
-    if (cleanedTeam && cleanedTeam.length > 0) {
-      if (!isValidName(cleanedTeam)) {
-        showMessage('notifyMessage', 'Error: Team name contains invalid characters', true);
-        return;
-      }
-    }
-
-    if (!cleanedUrl) {
-      showMessage('notifyMessage', 'Error: URL is required', true);
-      return;
-    }
-
-    if (!isValidUrl(cleanedUrl)) {
-      showMessage('notifyMessage', 'Error: Invalid URL. Use http:// or https://', true);
-      return;
-    }
-
-    const urlBlacklist = ['localhost', '127.0.0.1', '0.0.0.0', '192.168.', '10.0.', '172.16.', 'internal', 'example.com', 'test.com'];
-    for (let blocked of urlBlacklist) {
-      if (cleanedUrl.toLowerCase().includes(blocked)) {
-        showMessage('notifyMessage', 'Error: Invalid or blocked URL detected', true);
-        return;
-      }
-    }
-
-    if (isSpamDetected(cleanedNotify, cleanedTeam, cleanedUrl)) {
-      showMessage('notifyMessage', 'Error: Spam detected. Please wait before sending more notifications.', true);
-      return;
-    }
-
-    const isSpecial = isSpecialDomain(cleanedUrl);
-    let teamDisplay = cleanedTeam && cleanedTeam.length > 0 ? cleanedTeam : 'Anonymous';
-    if (teamDisplay.length > 15) {
-      teamDisplay = teamDisplay.substring(0, 12) + '...';
-    }
-
-    const newEntry = {
-      id: Date.now(),
-      hacker: escapeHtmlSimple(cleanedNotify),
-      team: escapeHtmlSimple(cleanedTeam || ''),
-      teamDisplay: escapeHtmlSimple(teamDisplay),
-      url: cleanedUrl,
-      isSpecial: isSpecial,
-      timestampMs: Date.now()
-    };
-
+    const nInp=document.getElementById('notifyName'), tInp=document.getElementById('teamName'), uInp=document.getElementById('targetUrl');
+    let rawNotify=nInp.value, rawTeam=tInp.value, rawUrl=uInp.value;
+    if(rawUrl.length>230){ showMessage('notifyMessage','Error: URL exceeds 230 characters',true); nInp.value=tInp.value=uInp.value=''; return; }
+    let cleanedNotify=sanitizeInput(rawNotify), cleanedTeam=sanitizeInput(rawTeam), cleanedUrl=rawUrl.trim();
+    if(!cleanedNotify||cleanedNotify.length<2){ showMessage('notifyMessage','Error: Hacker name must be at least 2 characters',true); return; }
+    if(!isValidName(cleanedNotify)){ showMessage('notifyMessage','Error: Hacker name contains invalid characters',true); return; }
+    if(cleanedTeam && !isValidName(cleanedTeam)){ showMessage('notifyMessage','Error: Team name contains invalid characters',true); return; }
+    if(!cleanedUrl){ showMessage('notifyMessage','Error: URL is required',true); return; }
+    if(!isValidUrl(cleanedUrl)){ showMessage('notifyMessage','Error: Invalid URL. Use http:// or https://',true); return; }
+    const blacklist=['localhost','127.0.0.1','192.168.','10.0.','172.16.','internal','example.com','test.com'];
+    if(blacklist.some(b=>cleanedUrl.toLowerCase().includes(b))){ showMessage('notifyMessage','Error: Invalid or blocked URL detected',true); return; }
+    if(isSpamDetected(cleanedNotify,cleanedUrl)){ showMessage('notifyMessage','Error: Spam detected. Please wait.',true); return; }
+    const isSpecial=isSpecialDomain(cleanedUrl);
+    let teamDisplay=cleanedTeam||'Anonymous';
+    if(teamDisplay.length>15) teamDisplay=teamDisplay.substring(0,12)+'...';
+    const newEntry={ id:Date.now(), hacker:escapeHtmlSimple(cleanedNotify), team:escapeHtmlSimple(cleanedTeam||''), teamDisplay:escapeHtmlSimple(teamDisplay), url:cleanedUrl, isSpecial, timestampMs:Date.now() };
     defaceEntries.unshift(newEntry);
-    await syncToCloud();
+    await addToFirebase(newEntry);
     updateHackerStats(cleanedNotify);
-    renderArchives();
-    renderHome();
-    renderRanked();
-
-    notifyNameInput.value = '';
-    teamNameInput.value = '';
-    targetUrlInput.value = '';
-
-    showMessage('notifyMessage', 'Deface added to archives', false);
+    renderArchives(); renderHome(); renderRanked(); renderProfiles();
+    nInp.value=tInp.value=uInp.value='';
+    showMessage('notifyMessage','Deface added to archives',false);
   }
 
-  const navBtns = document.querySelectorAll('.nav-btn');
-  const pages = document.querySelectorAll('.page');
-
-  navBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      const pageId = btn.getAttribute('data-page');
-      
-      navBtns.forEach(b => b.classList.remove('active'));
+  const navBtns=document.querySelectorAll('.nav-btn'), pages=document.querySelectorAll('.page');
+  navBtns.forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const pageId=btn.getAttribute('data-page');
+      navBtns.forEach(b=>b.classList.remove('active'));
       btn.classList.add('active');
-      
-      pages.forEach(page => page.classList.remove('active'));
+      pages.forEach(p=>p.classList.remove('active'));
       document.getElementById(pageId).classList.add('active');
-      
-      if (pageId === 'ranked') {
-        renderRanked();
-      }
+      if(pageId==='ranked') renderRanked();
+      if(pageId==='profiles') renderProfiles();
     });
   });
-
-  const sendBtn = document.getElementById('sendNotifyBtn');
-  if (sendBtn) sendBtn.addEventListener('click', handleSendNotify);
-
-  const inputs = ['notifyName', 'teamName', 'targetUrl'];
-  inputs.forEach(id => {
-    const input = document.getElementById(id);
-    if (input) {
-      input.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          handleSendNotify();
-        }
-      });
-    }
+  document.getElementById('sendNotifyBtn')?.addEventListener('click',handleSendNotify);
+  ['notifyName','teamName','targetUrl'].forEach(id=>{
+    document.getElementById(id)?.addEventListener('keypress',e=>{ if(e.key==='Enter'){ e.preventDefault(); handleSendNotify(); } });
   });
-
-  const modal = document.getElementById('mirrorModal');
-  const closeBtn = document.querySelector('.modal-close');
-  if (closeBtn) {
-    closeBtn.addEventListener('click', () => {
-      modal.style.display = 'none';
+  const searchInput=document.getElementById('searchInput'), searchClear=document.getElementById('searchClear');
+  if(searchInput){
+    searchInput.addEventListener('input',(e)=>{
+      currentSearchTerm=e.target.value;
+      if(searchClear) searchClear.style.display=currentSearchTerm?'inline-block':'none';
+      renderArchives();
     });
   }
-  window.addEventListener('click', (e) => {
-    if (e.target === modal) modal.style.display = 'none';
-  });
-
-  syncFromCloud();
-  setInterval(() => {
-    syncFromCloud();
-  }, 30000);
+  if(searchClear){
+    searchClear.addEventListener('click',()=>{
+      searchInput.value='';
+      currentSearchTerm='';
+      searchClear.style.display='none';
+      renderArchives();
+    });
+  }
+  const modal=document.getElementById('mirrorModal'), closeBtn=document.querySelector('.modal-close');
+  if(closeBtn) closeBtn.addEventListener('click',()=>{ modal.style.display='none'; });
+  window.addEventListener('click',(e)=>{ if(e.target===modal) modal.style.display='none'; });
+  loadFromFirebase();
+  setInterval(()=>{ renderHome(); checkAndResetRanking(); renderRanked(); },300000);
 })();
