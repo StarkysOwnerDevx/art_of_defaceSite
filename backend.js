@@ -1,5 +1,5 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-import { getDatabase, ref, get, set, query, orderByChild, limitToLast } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+import { getDatabase, ref, get, set, query, orderByChild, limitToLast, onValue } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyA3KGM_iDgn_tWF1eHLAwNXdncr7Re6XQo",
@@ -22,16 +22,42 @@ const database = getDatabase(app);
   let currentSearchTerm = '';
 
   async function loadFromFirebase() {
+    console.log('Loading from Firebase...');
     try {
       const defacesRef = ref(database, 'defaces');
-      const defacesSnapshot = await get(query(defacesRef, orderByChild('timestampMs'), limitToLast(500)));
-      defaceEntries = [];
+      const defacesSnapshot = await get(defacesRef);
+      console.log('Defaces snapshot exists:', defacesSnapshot.exists());
+      
       if (defacesSnapshot.exists()) {
-        defacesSnapshot.forEach(child => { defaceEntries.unshift(child.val()); });
+        const data = defacesSnapshot.val();
+        defaceEntries = Object.values(data).sort((a,b) => b.timestampMs - a.timestampMs);
+        console.log('Loaded', defaceEntries.length, 'defaces');
+      } else {
+        defaceEntries = [];
+        console.log('No defaces found, creating sample data');
+        const sampleEntry = {
+          id: Date.now(),
+          hacker: "sample_hacker",
+          team: "sample_team",
+          teamDisplay: "sample_team",
+          url: "https://example.com",
+          isSpecial: false,
+          timestampMs: Date.now()
+        };
+        defaceEntries = [sampleEntry];
+        await set(ref(database, 'defaces/' + sampleEntry.id), sampleEntry);
+        console.log('Sample data created');
       }
+      
       const statsRef = ref(database, 'stats_hacker');
       const statsSnapshot = await get(statsRef);
-      hackerStats = statsSnapshot.exists() ? statsSnapshot.val() : {};
+      if (statsSnapshot.exists()) {
+        hackerStats = statsSnapshot.val();
+      } else {
+        hackerStats = {};
+        await set(ref(database, 'stats_hacker'), {});
+      }
+      
       const resetRef = ref(database, 'stats_lastReset');
       const resetSnapshot = await get(resetRef);
       if (resetSnapshot.exists()) {
@@ -40,28 +66,38 @@ const database = getDatabase(app);
         lastResetDate = new Date().setHours(0,0,0,0);
         await set(ref(database, 'stats_lastReset'), lastResetDate);
       }
-      checkAndResetRanking();
+      
+      console.log('Data loaded successfully');
       renderArchives();
       renderHome();
       renderRanked();
       renderProfiles();
       startResetTimer();
-    } catch(e) {
+      
+    } catch (e) {
       console.error('Firebase error:', e);
-      document.getElementById('homeTableBody').innerHTML = '<tr class="empty-row"><td colspan="4">connection error... refresh</td></tr>';
+      document.getElementById('homeTableBody').innerHTML = '<tr class="empty-row"><td colspan="4">database error: check console</td></tr>';
+      document.getElementById('archivesTableBody').innerHTML = '<tr class="empty-row"><td colspan="4">database error: check console</td></tr>';
     }
   }
 
   async function addToFirebase(entry) {
-    try { await set(ref(database, 'defaces/' + entry.id), entry); }
-    catch(e) { console.error('Save error:', e); throw e; }
+    try {
+      await set(ref(database, 'defaces/' + entry.id), entry);
+      console.log('Entry saved to Firebase:', entry.id);
+    } catch(e) {
+      console.error('Save error:', e);
+      throw e;
+    }
   }
 
   async function updateStatsInFirebase() {
     try {
       await set(ref(database, 'stats_hacker'), hackerStats);
       await set(ref(database, 'stats_lastReset'), lastResetDate);
-    } catch(e) { console.error('Stats update error:', e); }
+    } catch(e) {
+      console.error('Stats update error:', e);
+    }
   }
 
   function checkAndResetRanking() {
@@ -180,7 +216,7 @@ const database = getDatabase(app);
   function domainWithIcon(domain, url, isSpecial) {
     const starHtml = isSpecial ? '<span class="star">*</span>' : '';
     const icon = `<svg class="domain-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
-    return `<td class="domain-cell">${starHtml}${icon}<a href="${escapeHtmlSimple(url)}" target="_blank" rel="noopener noreferrer">${escapeHtmlSimple(domain)}</a></td>`;
+    return `<td class="domain-cell">${starHtml}<span style="display:inline-flex;align-items:center;gap:4px;">${icon}<a href="${escapeHtmlSimple(url)}" target="_blank" rel="noopener noreferrer">${escapeHtmlSimple(domain)}</a></span></td>`;
   }
 
   function renderHome() {
@@ -231,8 +267,7 @@ const database = getDatabase(app);
     if (top.length === 0) { tbody.innerHTML = '<tr class="empty-row"><td colspan="3">no data available</td></tr>'; return; }
     let html = '';
     for (let i=0; i<top.length; i++) {
-      const rank = i+1;
-      html += `<tr><td>#${rank}</td><td>${escapeHtmlSimple(top[i].name)}</td><td>${top[i].count}</td></tr>`;
+      html += `<tr><td>#${i+1}</td><td>${escapeHtmlSimple(top[i].name)}</td><td>${top[i].count}</td></tr>`;
     }
     tbody.innerHTML = html;
   }
@@ -353,6 +388,7 @@ const database = getDatabase(app);
   const modal=document.getElementById('mirrorModal'), closeBtn=document.querySelector('.modal-close');
   if(closeBtn) closeBtn.addEventListener('click',()=>{ modal.style.display='none'; });
   window.addEventListener('click',(e)=>{ if(e.target===modal) modal.style.display='none'; });
+  
   loadFromFirebase();
   setInterval(()=>{ renderHome(); checkAndResetRanking(); renderRanked(); },300000);
 })();
